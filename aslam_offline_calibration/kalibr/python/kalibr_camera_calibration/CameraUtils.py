@@ -619,21 +619,49 @@ def plotCameraRig(baselines, fno=1, clearFigure=True, title=""):
     a3d.set_zlabel('z')
 
 
-def exportPoses(cself, filename):
+#def exportPoses(cself, filename):
     
     # Append our header, and select times at IMU rate
-    f = open(filename, 'w')
-    print("#timestamp, p_RS_R_x [m], p_RS_R_y [m], p_RS_R_z [m], q_RS_w [], q_RS_x [], q_RS_y [], q_RS_z []", file=f)
+   # f = open(filename, 'w')
+   # print("#timestamp, p_RS_R_x [m], p_RS_R_y [m], p_RS_R_z [m], q_RS_w [], q_RS_x [], q_RS_y [], q_RS_z []", file=f)
     
     # Times are in nanoseconds -> convert to seconds
     # Use the ETH groundtruth csv format [t,q,p,v,bg,ba]
+   # views = sorted(cself.views, key=lambda x: x.timestamp)
+   # for view in views:
+       # T_target_camera = sm.Transformation(view.dv_T_target_camera.T())
+       # position = T_target_camera.t()
+       # orientation = T_target_camera.q()
+       # print("{:.0f},".format(1e9 * view.timestamp) + ",".join(map("{:.6f}".format, position)) \
+              # + "," + ",".join(map("{:.6f}".format, orientation)) , file=f)
+
+def exportPoses(cself, filename):
+    import os
+    base, ext = os.path.splitext(filename)
+    
+    # Get cam transforms (cam0 = identity, others from baselines)
+    cam_transforms = [sm.Transformation()]
+    for baseline_dv in cself.baselines:
+        T_camN_camNm1 = sm.Transformation(baseline_dv.T())
+        T_cam0_camN = cam_transforms[-1] * T_camN_camNm1.inverse()
+        cam_transforms.append(T_cam0_camN)
+    
     views = sorted(cself.views, key=lambda x: x.timestamp)
-    for view in views:
-        T_target_camera = sm.Transformation(view.dv_T_target_camera.T())
-        position = T_target_camera.t()
-        orientation = T_target_camera.q()
-        print("{:.0f},".format(1e9 * view.timestamp) + ",".join(map("{:.6f}".format, position)) \
-               + "," + ",".join(map("{:.6f}".format, orientation)) , file=f)
+    
+    for cam_id, T_cam0_camN in enumerate(cam_transforms):
+        cam_filename = "{}-cam{}.csv".format(base, cam_id)
+        f = open(cam_filename, 'w')
+        print("#timestamp, p_RS_R_x [m], p_RS_R_y [m], p_RS_R_z [m], q_RS_w [], q_RS_x [], q_RS_y [], q_RS_z []", file=f)
+        
+        for view in views:
+            T_target_cam0 = sm.Transformation(view.dv_T_target_camera.T())
+            T_target_camN = T_target_cam0 * T_cam0_camN
+            position = T_target_camN.t()
+            orientation = T_target_camN.q()
+            print("{:.0f},".format(1e9 * view.timestamp) + ",".join(map("{:.6f}".format, position)) \
+                   + "," + ",".join(map("{:.6f}".format, orientation)), file=f)
+        f.close()
+        print("Exported cam{} poses to: {}".format(cam_id, cam_filename))
 
 def saveResultTxt(cself, filename="camera_calibration_result.txt"):
     f1=open(filename, 'w')

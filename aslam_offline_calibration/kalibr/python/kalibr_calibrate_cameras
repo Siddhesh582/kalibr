@@ -433,6 +433,9 @@ def main():
             #generate trajectory file
             if parsed.exportPoses:
                 print("Exporting poses...")
+                print(f"  Total views available: {numViews}")
+                print(f"  Views used (getNumBatches): {calibrator.estimator.getNumBatches()}")
+                print(f"  Views in calibrator.views: {len(calibrator.views)}" 
                 posesFile = bagtag + "-poses-cam0.csv"
                 kcc.exportPoses(calibrator, filename=posesFile)
                 print("  Poses written to {0}".format(posesFile))
