@@ -159,6 +159,7 @@ def main():
     numCams = len(parsed.topics)
 
     obsdb = kcc.ObservationDatabase(parsed.max_delta_approxsync)
+    # default: max_delta_approxsync = 0.02s (20ms)
         
     for cam_id in range(0, numCams):
         topic = parsed.topics[cam_id]
@@ -204,7 +205,7 @@ def main():
     if not graph.isGraphConnected():
         obsdb.printTable()
         print("Cameras are not connected through mutual observations, please check the dataset. Maybe adjust the approx. sync. tolerance.")
-        graph.plotGraph()
+        graph.plotGraph(noShow=True)
         sys.exit(-1)
        
     #loop to restart the optimization
@@ -221,7 +222,7 @@ def main():
                 baseline_guesses=[]
                 
             if parsed.verbose and len(cameraList)>1:
-                graph.plotGraph()
+                graph.plotGraph(noShow=True)
 
             for baseline_idx, baseline in enumerate(baseline_guesses):
                 print("initialized baseline between cam{0} and cam{1} to:".format(baseline_idx, baseline_idx+1))
@@ -433,9 +434,6 @@ def main():
             #generate trajectory file
             if parsed.exportPoses:
                 print("Exporting poses...")
-                print(f"  Total views available: {numViews}")
-                print(f"  Views used (getNumBatches): {calibrator.estimator.getNumBatches()}")
-                print(f"  Views in calibrator.views: {len(calibrator.views)}" 
                 posesFile = bagtag + "-poses-cam0.csv"
                 kcc.exportPoses(calibrator, filename=posesFile)
                 print("  Poses written to {0}".format(posesFile))

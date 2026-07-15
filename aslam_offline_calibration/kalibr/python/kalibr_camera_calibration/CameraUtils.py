@@ -26,6 +26,7 @@ import math
 import gc
 import sys
 
+
 # make numpy print prettier
 np.set_printoptions(suppress=True)
 
@@ -324,7 +325,7 @@ def recoverCovariance(cself):
     
     return std_baselines, std_cameras
 
-def saveChainParametersYaml(cself, resultFile, graph):
+def saveChainParametersYaml(cself, resultFile, graph=None):
     cameraModels = {acvb.DistortedPinhole: 'pinhole',
                     acvb.EquidistantPinhole: 'pinhole',
                     acvb.FovPinhole: 'pinhole',
@@ -367,9 +368,10 @@ def saveChainParametersYaml(cself, resultFile, graph):
 
         chain.addCameraAtEnd(camParams)
 
-    for cam_id, cam in enumerate(cself.cameras):
-        overlaps = graph.getCamOverlaps(cam_id)
-        chain.setCamOverlaps(cam_id, overlaps)
+    if graph is not None:
+        for cam_id, cam in enumerate(cself.cameras):
+            overlaps = graph.getCamOverlaps(cam_id)
+            chain.setCamOverlaps(cam_id, overlaps)
         
     #print all baselines in the camera chain
     for bidx, baseline_dv in enumerate(cself.baselines):
@@ -472,11 +474,21 @@ def generateReport(cself, filename="report.pdf", showOnScreen=True, graph=None, 
     
     #plot trajectory
     if len(cself.views)>2:
+        #cam0 trjaectory
         f=pl.figure(1003)
         title="cam0: estimated poses"
-        plotTrajectory(cself, fno=f.number, clearFigure=False, title=title)
+        plotTrajectory(cself, fno=f.number, clearFigure=False, title=title, T_camN_cam0=None)
         plotter.add_figure(title, f)
         figs.append(f)
+
+        #cam1 trajectory
+        if len(cself.cameras)>1:
+            T_cam1_cam0 = sm.Transformation(cself.baselines[0].T())
+            f = pl.figure(1005)
+            title="cam1:estimated poses"
+            plotTrajectory(cself, fno=f.number, clearFigure=False, title=title, T_camN_cam0=T_cam1_cam0)
+            plotter.add_figure(title, f)
+            figs.append(f)
         
     #plot for each camera
     for cidx, cam in enumerate(cself.cameras):
@@ -546,7 +558,10 @@ def plotCorners(gridobs, fno=1, cornerlist=None, clearFigure=True, plotImage=Tru
     pl.ylim([gridobs.imRows(),0])
 
 
-def plotTrajectory(cself, fno=1, clearFigure=True, title=""):
+def plotTrajectory(cself, fno=1, clearFigure=True, title="", T_camN_cam0=None):
+    if T_camN_cam0 is None:
+        T_camN_cam0 = sm.Transformation()
+
     f = pl.figure(fno)
     if clearFigure:
         f.clf()
@@ -562,17 +577,18 @@ def plotTrajectory(cself, fno=1, clearFigure=True, title=""):
     T_target_camera_last = None;
     for view in views:
         # get this view in target frame
-        T_target_camera = sm.Transformation(view.dv_T_target_camera.T())
-        sm.plotCoordinateFrame(a3d, T_target_camera.T(), size=size)
+        T_target_cam0 = sm.Transformation(view.dv_T_target_camera.T())
+        T_target_camN = T_camN_cam0 * T_target_cam0
+        sm.plotCoordinateFrame(a3d, T_target_camN.T(), size=size)
         # record min max
-        traj_max = np.maximum(traj_max, T_target_camera.t())
-        traj_min = np.minimum(traj_min, T_target_camera.t())
+        traj_max = np.maximum(traj_max, T_target_camN.t())
+        traj_min = np.minimum(traj_min, T_target_camN.t())
         # compute relative change between
         if T_target_camera_last != None:
             pos1 = T_target_camera_last.t()
-            pos2 = T_target_camera.t()
+            pos2 = T_target_camN.t()
             a3d.plot3D([pos1[0], pos2[0]],[pos1[1], pos2[1]],[pos1[2], pos2[2]],'k-', linewidth=1)
-        T_target_camera_last = T_target_camera;
+        T_target_camera_last = T_target_camN;
 
     #TODO: should also plot the target board here!
 
@@ -619,43 +635,42 @@ def plotCameraRig(baselines, fno=1, clearFigure=True, title=""):
     a3d.set_zlabel('z')
 
 
-#def exportPoses(cself, filename):
+# def exportPoses(cself, filename):
     
-    # Append our header, and select times at IMU rate
-   # f = open(filename, 'w')
-   # print("#timestamp, p_RS_R_x [m], p_RS_R_y [m], p_RS_R_z [m], q_RS_w [], q_RS_x [], q_RS_y [], q_RS_z []", file=f)
+#     # Append our header, and select times at IMU rate
+#     f = open(filename, 'w')
+#     print("#timestamp, p_RS_R_x [m], p_RS_R_y [m], p_RS_R_z [m], q_RS_w [], q_RS_x [], q_RS_y [], q_RS_z []", file=f)
     
-    # Times are in nanoseconds -> convert to seconds
-    # Use the ETH groundtruth csv format [t,q,p,v,bg,ba]
-   # views = sorted(cself.views, key=lambda x: x.timestamp)
-   # for view in views:
-       # T_target_camera = sm.Transformation(view.dv_T_target_camera.T())
-       # position = T_target_camera.t()
-       # orientation = T_target_camera.q()
-       # print("{:.0f},".format(1e9 * view.timestamp) + ",".join(map("{:.6f}".format, position)) \
-              # + "," + ",".join(map("{:.6f}".format, orientation)) , file=f)
+#     # Times are in nanoseconds -> convert to seconds
+#     # Use the ETH groundtruth csv format [t,q,p,v,bg,ba]
+#     views = sorted(cself.views, key=lambda x: x.timestamp)
+#     for view in views:
+#         T_target_camera = sm.Transformation(view.dv_T_target_camera.T())
+#         position = T_target_camera.t()
+#         orientation = T_target_camera.q()
+#         print("{:.0f},".format(1e9 * view.timestamp) + ",".join(map("{:.6f}".format, position)) \
+#                + "," + ",".join(map("{:.6f}".format, orientation)) , file=f)
 
 def exportPoses(cself, filename):
+    # cam --> target, camera pose in target frame
     import os
     base, ext = os.path.splitext(filename)
     
-    # Get cam transforms (cam0 = identity, others from baselines)
-    cam_transforms = [sm.Transformation()]
+    # Build T_camN_cam0 for each camera
+    cam_transforms = [sm.Transformation()]  # cam0 = identity
     for baseline_dv in cself.baselines:
-        T_camN_camNm1 = sm.Transformation(baseline_dv.T())
-        T_cam0_camN = cam_transforms[-1] * T_camN_camNm1.inverse()
-        cam_transforms.append(T_cam0_camN)
+        T_camN_cam0 = sm.Transformation(baseline_dv.T()) * cam_transforms[-1]
+        cam_transforms.append(T_camN_cam0)
     
     views = sorted(cself.views, key=lambda x: x.timestamp)
     
-    for cam_id, T_cam0_camN in enumerate(cam_transforms):
+    for cam_id, T_camN_cam0 in enumerate(cam_transforms):
         cam_filename = "{}-cam{}.csv".format(base, cam_id)
         f = open(cam_filename, 'w')
         print("#timestamp, p_RS_R_x [m], p_RS_R_y [m], p_RS_R_z [m], q_RS_w [], q_RS_x [], q_RS_y [], q_RS_z []", file=f)
-        
         for view in views:
             T_target_cam0 = sm.Transformation(view.dv_T_target_camera.T())
-            T_target_camN = T_target_cam0 * T_cam0_camN
+            T_target_camN = T_camN_cam0 * T_target_cam0
             position = T_target_camN.t()
             orientation = T_target_camN.q()
             print("{:.0f},".format(1e9 * view.timestamp) + ",".join(map("{:.6f}".format, position)) \

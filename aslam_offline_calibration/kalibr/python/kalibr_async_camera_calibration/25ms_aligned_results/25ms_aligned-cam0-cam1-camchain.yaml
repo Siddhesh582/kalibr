@@ -1,0 +1,30 @@
+cam0:
+  camera_model: pinhole
+  distortion_model: radtan
+  intrinsics: [1465.9076236225833, 1468.253603488655, 633.7971839458908, 514.5120617410657]
+  distortion_coeffs: [-0.23231912461341894, 0.20008168787058922, 0.00024345499433487793,
+    0.00019363995923121324]
+  resolution: [1224, 1024]
+  rostopic: /cam_sync/cam0/image_raw
+  cam_overlaps: [1]
+cam1:
+  camera_model: pinhole
+  distortion_model: radtan
+  intrinsics: [1468.2784689737252, 1471.0550265191366, 618.2997868676339, 516.655186739113]
+  distortion_coeffs: [-0.22845696621784017, 0.18747307946041614, -0.0001299216331592538,
+    0.00037571819461078006]
+  resolution: [1224, 1024]
+  rostopic: /cam_sync/cam1/image_raw
+  cam_overlaps: [0]
+  T_cn_cnm1: [[0.9957248042092781, 0.017090756095279276, -0.09077455777080393, 0.3804848754847627],
+    [-0.017593930625389366, 0.9998339518633558, -0.004745767214304112, -0.013413466048107243],
+    [0.09067837607468679, 0.006322559402255701, 0.9958601595380052, 0.08412601014876267],
+    [0.0, 0.0, 0.0, 1.0]]
+  timeshift_cam0_to_cam1: 0.041356164464320194
+  async_calibration:
+    method: bspline_crosscorr
+    tau_prior_s: 0.041356164464320194
+    tau_optimized_s: 0.041356164464320194
+    tau_fixed_in_opt: true
+    crosscorr_method: 3d_vector_dot_product
+    crosscorr_parabolic_refine: true

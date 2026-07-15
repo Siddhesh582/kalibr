@@ -42,7 +42,7 @@ def extractCornersFromDataset(dataset, detector, multithreading=False, numProces
             
     if multithreading:   
         if not numProcesses:
-            numProcesses = max(1,multiprocessing.cpu_count()-1)
+            numProcesses = max(1,multiprocessing.cpu_count()-1) #no. of cpu cores, defualt=1
         try:      
             manager = multiprocessing.Manager()
             resultq = manager.Queue()

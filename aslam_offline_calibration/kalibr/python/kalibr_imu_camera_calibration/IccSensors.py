@@ -16,7 +16,8 @@ import math
 import numpy as np
 import pylab as pl
 import scipy.optimize
-
+import matplotlib
+matplotlib.use('Agg')
 
 def initCameraBagDataset(bagfile, topic, from_to, freq, perform_synchronization):
     print("Initializing camera rosbag dataset reader:")
@@ -62,8 +63,7 @@ class IccCamera():
         #extract corners
         self.setupCalibrationTarget( targetConfig, showExtraction=showCorners, showReproj=showReproj, imageStepping=showOneStep )
         multithreading = not (showCorners or showReproj or showOneStep)
-        self.targetObservations = kc.extractCornersFromDataset(self.dataset, self.detector, multithreading=multithreading)
-        
+        self.targetObservations = kc.extractCornersFromDataset(self.dataset, self.detector, multithreading=multithreading)   
         #an estimate of the gravity in the world coordinate frame  
         self.gravity_w = np.array([9.80655, 0., 0.])
         
@@ -252,24 +252,100 @@ class IccCamera():
         dT = np.mean(np.diff( times ))
         shift = -discrete_shift*dT
         
-        #Create plots
-        if verbose:
-            pl.plot(t, omega_measured_norm, label="measured_raw")
-            pl.plot(t, omega_predicted_norm, label="predicted")
-            pl.plot(t-shift, omega_measured_norm, label="measured_corrected")
-            pl.legend()
-            pl.title("Time shift prior camera-imu estimation")
-            pl.figure()
-            pl.plot(corr)
-            pl.title("Cross-correlation ||omega_predicted||, ||omega_measured||")
-            pl.show()
-            sm.logDebug("discrete time shift: {0}".format(discrete_shift))
-            sm.logDebug("cont. time shift: {0}".format(shift))
-            sm.logDebug("dT: {0}".format(dT))
         
+        t_start_plot = t[0]
+        t_rel = t - t_start_plot
+
+        # compute cross-correlation diagnostics for annotations
+        lag_times_imu = np.arange(-(len(omega_measured_norm) - 1), len(omega_measured_norm)) * dT
+        peak_idx_imu  = corr.argmax()
+        peak_lag_imu  = lag_times_imu[peak_idx_imu]
+        peak_val_imu  = corr[peak_idx_imu]
+
+        target_lag_imu   = 0.050
+        idx_50ms_imu     = int(round(target_lag_imu / dT)) + (len(omega_measured_norm) - 1)
+        idx_50ms_imu     = np.clip(idx_50ms_imu, 0, len(corr) - 1)
+        corr_at_50ms_imu = corr[idx_50ms_imu]
+
+        # omega norm plot
+        fig, ax = pl.subplots(1, 1, figsize=(10, 4))
+        ax.plot(t_rel, omega_measured_norm, label="measured_imuGyro")
+        ax.plot(t_rel, omega_predicted_norm, label="predicted_cam")
+        ax.plot(t_rel - shift, omega_measured_norm, label="measured_corrected (τ=%.4fs)" % shift)
+        ax.set_xlabel("Time from start (s)")
+        ax.set_ylabel("Angular vel (rad/s)")
+        ax.set_title("Time shift prior camera-imu estimation")
+        ax.legend()
+        ax.grid(True)
+        pl.tight_layout()
+        fig.savefig('/data/timeshift_omega_imu.png', dpi=150, bbox_inches='tight')
+
+        # full cross-correlation plot
+        fig_full = pl.figure(figsize=(10, 4))
+        pl.plot(lag_times_imu, corr, color='tab:blue')
+        pl.plot(peak_lag_imu, peak_val_imu, 'kx', markersize=10, markeredgewidth=2)
+        pl.annotate('peak\nlag=%.4fs\nscore=%.2f' % (peak_lag_imu, peak_val_imu),
+                        xy=(peak_lag_imu, peak_val_imu),
+                        xytext=(peak_lag_imu + 0.005, peak_val_imu * 0.97),
+                        fontsize=8, color='black',
+                        arrowprops=dict(arrowstyle='->', color='black', lw=1.2))
+        pl.plot(target_lag_imu, corr_at_50ms_imu, 'kx', markersize=10, markeredgewidth=2)
+        pl.annotate('50ms\nscore=%.2f' % corr_at_50ms_imu,
+                    xy=(target_lag_imu, corr_at_50ms_imu),
+                    xytext=(target_lag_imu + 0.005, corr_at_50ms_imu * 0.97),
+                    fontsize=8, color='black',
+                    arrowprops=dict(arrowstyle='->', color='black', lw=1.2))
+        pl.axvline(x=peak_lag_imu, color='r', linestyle='--',
+                    label='peak at %.4fs' % peak_lag_imu)
+        pl.xlabel("Lag (s)")
+        pl.ylabel("Correlation score")
+        pl.title("Cross-correlation ||omega_predicted||, ||omega_measured||")
+        pl.legend()
+        pl.grid(True)
+        pl.tight_layout()
+        fig_full.savefig('/data/timeshift_corr_full_imu.png', dpi=150, bbox_inches='tight')
+
+        # zoomed ±100ms around peak
+        zoom_margin = 0.100
+        zoom_mask   = (lag_times_imu >= peak_lag_imu - zoom_margin) & \
+                          (lag_times_imu <= peak_lag_imu + zoom_margin)
+        lag_zoom    = lag_times_imu[zoom_mask]
+        corr_zoom   = corr[zoom_mask]
+
+        fig_zoom = pl.figure(figsize=(10, 4))
+        pl.plot(lag_zoom, corr_zoom, color='tab:blue')
+        pl.plot(peak_lag_imu, peak_val_imu, 'kx', markersize=10, markeredgewidth=2)
+        pl.annotate('peak\nlag=%.4fs\nscore=%.2f' % (peak_lag_imu, peak_val_imu),
+                        xy=(peak_lag_imu, peak_val_imu),
+                        xytext=(peak_lag_imu + 0.005, peak_val_imu * 0.97),
+                        fontsize=8, color='black',
+                        arrowprops=dict(arrowstyle='->', color='black', lw=1.2))
+        if (peak_lag_imu - zoom_margin) <= target_lag_imu <= (peak_lag_imu + zoom_margin):
+            pl.plot(target_lag_imu, corr_at_50ms_imu, 'kx', markersize=10, markeredgewidth=2)
+            pl.annotate('50ms\nscore=%.2f' % corr_at_50ms_imu,
+                            xy=(target_lag_imu, corr_at_50ms_imu),
+                            xytext=(target_lag_imu + 0.005, corr_at_50ms_imu * 0.97),
+                            fontsize=8, color='black',
+                            arrowprops=dict(arrowstyle='->', color='black', lw=1.2))
+        pl.axvline(x=peak_lag_imu, color='r', linestyle='--',
+                       label='peak at %.4fs' % peak_lag_imu)
+        pl.xlabel("Lag (s)")
+        pl.ylabel("Correlation score")
+        pl.title("Cross-correlation zoomed ±100ms around peak\n||omega_predicted||, ||omega_measured||")
+        pl.legend()
+        pl.grid(True)
+        pl.tight_layout()
+        fig_zoom.savefig('/data/timeshift_corr_zoom_imu.png', dpi=150, bbox_inches='tight')
+
+        pl.close('all')
+
+        sm.logDebug("discrete time shift: {0}".format(discrete_shift))
+        sm.logDebug("cont. time shift: {0}".format(shift))
+        sm.logDebug("dT: {0}".format(dT))
+
         #store the timeshift (t_imu = t_cam + timeshiftCamToImuPrior)
         self.timeshiftCamToImuPrior = shift
-        
+
         print("  Time shift camera to imu (t_imu = t_cam + shift):")
         print(self.timeshiftCamToImuPrior)
         
