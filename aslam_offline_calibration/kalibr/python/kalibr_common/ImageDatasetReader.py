@@ -11,10 +11,13 @@ import sm
 class BagImageDatasetReaderIterator(object):
   def __init__(self, dataset, indices=None):
     self.dataset = dataset
+
+    #list of image indices to iterate over 
     if indices is None:
       self.indices = np.arange(dataset.numImages())
     else:
       self.indices = indices
+      
     self.iter = self.indices.__iter__()
 
   def __iter__(self):

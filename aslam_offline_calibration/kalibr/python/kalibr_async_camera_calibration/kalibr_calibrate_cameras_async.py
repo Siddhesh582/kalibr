@@ -11,191 +11,24 @@ import sm
 import sys
 import bsplines
 import signal
-import argparse 
 import math
 import pylab as pl
 import multiprocessing
 import os
 import yaml
 
+from helpers.read_dataset import initBagDataset
+from helpers.cli import parseArgs
+from helpers.geometry import rotation_matrix_to_rotvec
+
+#constants for grouping variables in optimization and helper variables 
 CALIBRATION_GROUP_ID = 0
 HELPER_GROUP_ID = 1
-
-#read image topics from the dataset
-def initBagDataset(bagfile, topic, from_to, freq):
-    print("\tDataset:          {0}".format(bagfile))
-    print("\tTopic:            {0}".format(topic))
-    reader = kc.BagImageDatasetReader(bagfile, topic, bag_from_to=from_to, bag_freq=freq)
-    print("\tNumber of images in the bag: {0}".format(reader.numImages()))
-    return reader
-
-#available models
-cameraModels = { 'pinhole-radtan': acvb.DistortedPinhole,
-                 'pinhole-equi':   acvb.EquidistantPinhole,
-                 'pinhole-fov':    acvb.FovPinhole,
-                 'omni-none':      acvb.Omni,
-                 'omni-radtan':    acvb.DistortedOmni,
-                 'eucm-none':      acvb.ExtendedUnified,
-                 'ds-none':        acvb.DoubleSphere}
 
 #for interupting pipeline 
 def signal_exit(signal, frame):
     sm.logWarn("Shutdown requested! (CTRL+C)")
     sys.exit(2)
-
-def parseArgs():
-    class KalibrArgParser(argparse.ArgumentParser):
-        def error(self, message):
-            self.print_help()
-            sm.logError('%s' % message)
-            sys.exit(2)
-        def format_help(self):
-            formatter = self._get_formatter()
-            formatter.add_text(self.description)
-            formatter.add_usage(self.usage, self._actions,
-                                self._mutually_exclusive_groups)
-            for action_group in self._action_groups:
-                formatter.start_section(action_group.title)
-                formatter.add_text(action_group.description)
-                formatter.add_arguments(action_group._group_actions)
-                formatter.end_section()
-            formatter.add_text(self.epilog)
-            return formatter.format_help()
-
-    usage = """
-    Calibrate extrinsics and time offsets of a camera system using an AprilGrid.
-    Camera 0 is the reference. All other cameras are calibrated against it.
-
-    %(prog)s --models pinhole-radtan pinhole-radtan --target aprilgrid.yaml \\
-              --bag MYROSBAG.bag --topics /cam0/image_raw /cam1/image_raw \\
-              --cam-intrinsics cam0.yaml cam1.yaml
-
-    example aprilgrid.yaml:
-        target_type: 'aprilgrid'
-        tagCols: 6
-        tagRows: 9
-        tagSize: 0.034
-        tagSpacing: 0.3"""
-
-    parser = KalibrArgParser(
-        description='Calibrate the extrinsics and time offsets of a camera system with asynchronous triggering.',
-        usage=usage)
-
-    parser.add_argument('--models', nargs='+', dest='models',
-        help='Camera model per topic: {0}'.format(list(cameraModels.keys())),
-        required=True)
-
-    groupSource = parser.add_argument_group('Data source')
-    groupSource.add_argument('--bag', dest='bagfile',
-        help='ROS bag file containing the image data', required=True)
-    groupSource.add_argument('--topics', nargs='+', dest='topics',
-        help='Image topic for each camera, in order (cam0 first)', required=True)
-    groupSource.add_argument('--bag-from-to', metavar='bag_from_to', type=float, nargs=2,
-        help='Use bag data in this time window [s]')
-    groupSource.add_argument('--bag-freq', metavar='bag_freq', type=float,
-        help='Subsample bag at this frequency [Hz]')
-
-    groupTarget = parser.add_argument_group('Calibration target')
-    groupTarget.add_argument('--target', dest='targetYaml',
-        help='Calibration target configuration yaml', required=True)
-
-    groupIntrinsics = parser.add_argument_group('Camera intrinsics')
-    groupIntrinsics.add_argument('--cam-intrinsics', nargs='+', dest='camIntrinsics',
-        help='Kalibr-format intrinsics yaml for each camera, in order', required=True)
-
-    groupCalib = parser.add_argument_group('Calibration settings')
-    groupCalib.add_argument('--no-time-calibration', action='store_true',
-        dest='noTimeCalibration', default=False,
-        help='Fix time offsets at the cross-correlation prior, do not optimize them (default: %(default)s)')
-    groupCalib.add_argument('--tau-prior', nargs='+', type=float, dest='tauPrior', default=None,
-        help='Override cross-correlation estimate for each non-reference camera [s]. '
-             'Provide one value per non-reference camera in order (e.g. --tau-prior 0.05 0.03).')
-    groupCalib.add_argument('--spline-order', type=int, dest='splineOrder', default=6,
-        help='B-spline order for pose trajectory (default: %(default)s)')
-    groupCalib.add_argument('--knots-per-second', type=int, dest='knotsPerSecond', default=100,
-        help='Pose spline knots per second (default: %(default)s)')
-    groupCalib.add_argument('--max-iter', type=int, dest='maxIterations', default=50,
-        help='Maximum optimizer iterations (default: %(default)s)')
-    groupCalib.add_argument('--time-offset-padding', type=float, dest='timeOffsetPadding', default=0.02,
-        help='Spline boundary padding in seconds (default: %(default)s)')
-
-    groupOutput = parser.add_argument_group('Output')
-    groupOutput.add_argument('--output-dir', dest='outputDir', default=None,
-        help='Directory for all output files (CSVs, plots, yaml). '
-             'Defaults to the directory containing the bag file.')
-    groupOutput.add_argument('--verbose', action='store_true', dest='verbose',
-        help='Enable verbose output')
-    groupOutput.add_argument('--show-extraction', action='store_true', dest='showExtraction',
-        help='Show target extraction video (disables parallel processing)')
-
-    if len(sys.argv) == 1:
-        parser.print_help()
-        sys.exit(2)
-
-    try:
-        parsed = parser.parse_args()
-    except:
-        sys.exit(2)
-
-    numCams = len(parsed.topics)
-
-    if numCams < 2:
-        sm.logError("At least 2 topics required (--topics).")
-        sys.exit(2)
-
-    if len(parsed.models) != numCams:
-        sm.logError("Number of models (%d) must match number of topics (%d)." % (len(parsed.models), numCams))
-        sys.exit(2)
-
-    if len(parsed.camIntrinsics) != numCams:
-        sm.logError("Number of intrinsics files (%d) must match number of topics (%d)." % (len(parsed.camIntrinsics), numCams))
-        sys.exit(2)
-
-    if parsed.tauPrior is not None and len(parsed.tauPrior) != numCams - 1:
-        sm.logError("--tau-prior expects %d values (one per non-reference camera), got %d." % (numCams - 1, len(parsed.tauPrior)))
-        sys.exit(2)
-
-    for m in parsed.models:
-        if m not in cameraModels:
-            sm.logError("Unknown camera model '%s'. Choose from: %s" % (m, list(cameraModels.keys())))
-            sys.exit(2)
-
-    if not os.path.isfile(parsed.bagfile):
-        sm.logError("Bag file not found: %s" % parsed.bagfile)
-        sys.exit(2)
-
-    if not os.path.isfile(parsed.targetYaml):
-        sm.logError("Target yaml not found: %s" % parsed.targetYaml)
-        sys.exit(2)
-
-    for f in parsed.camIntrinsics:
-        if not os.path.isfile(f):
-            sm.logError("Intrinsics file not found: %s" % f)
-            sys.exit(2)
-
-    if parsed.outputDir is None:
-        parsed.outputDir = os.path.dirname(os.path.abspath(parsed.bagfile))
-    else:
-        os.makedirs(parsed.outputDir, exist_ok=True)
-
-    return parsed
-
-def _rotation_matrix_to_rotvec(R):
-    """
-    Convert a 3x3 rotation matrix to a rotation vector (axis * angle).
-    Uses the Rodrigues formula inverse.
-    Matches the convention used by bsplines.BSplinePose (sm.RotationVector).
-    """
-    cos_angle = np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)
-    angle = np.arccos(cos_angle)
-    if angle < 1e-10:
-        return np.zeros(3)
-    axis = np.array([
-        R[2, 1] - R[1, 2],
-        R[0, 2] - R[2, 0],
-        R[1, 0] - R[0, 1]
-    ]) / (2.0 * np.sin(angle))
-    return axis * angle
 
 class AsyncCalibrator():
     # camera config, target config, dataset
@@ -1076,8 +909,8 @@ class AsyncCalibrator():
             rot_err   = np.degrees(np.arccos(cos_angle))
 
             t_composed = T_cam1_w_composed[:3, 3]
-            rv_opt     = _rotation_matrix_to_rotvec(T_cam1_w_composed[:3, :3])
-            rv_indep   = _rotation_matrix_to_rotvec(T_cam1_w_indep[:3, :3])
+            rv_opt     = rotation_matrix_to_rotvec(T_cam1_w_composed[:3, :3])
+            rv_indep   = rotation_matrix_to_rotvec(T_cam1_w_indep[:3, :3])
 
             if trans_err > 0.05:
                 outlier_count += 1
